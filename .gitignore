@@ -1,0 +1,4 @@
+*.exe
+*.db
+gomoniter-linux-*
+gomoniter.db
