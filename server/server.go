@@ -231,7 +231,6 @@ func (s *Server) collectAndSave() {
 	copy(charts, s.config.Charts)
 	s.configMu.RUnlock()
 
-	// 缓存采集结果：shell命令->输出，tcp地址->输出
 	shellCache := make(map[string]string)
 	tcpCache := make(map[string]string)
 
@@ -244,14 +243,22 @@ func (s *Server) collectAndSave() {
 			continue
 		}
 
+		log.Printf("[Collect] 开始采集图表: %s (ID: %s)", chart.Name, chart.ID)
+
 		values := make(map[string]float64)
 		for _, ds := range chart.DataSources {
+			log.Printf("[Collect] 处理数据源: %s (类型: %s)", ds.Name, ds.SourceType)
 			dsVals := s.collectDataSourceCached(ds, shellCache, tcpCache)
 			for k, v := range dsVals {
 				values[k] = v
+				log.Printf("[Collect] 获取值: %s = %f", k, v)
+			}
+			if len(dsVals) == 0 {
+				log.Printf("[Collect] 数据源 %s 没有返回数据", ds.Name)
 			}
 		}
 		if len(values) == 0 {
+			log.Printf("[Collect] 图表 %s 没有有效数据，跳过", chart.Name)
 			continue
 		}
 
@@ -261,10 +268,10 @@ func (s *Server) collectAndSave() {
 			Values:    values,
 		}
 		if err := s.store.PutDataPoint(dp); err != nil {
-			log.Printf("save data point error: %v", err)
+			log.Printf("[Collect] 保存数据点失败: %v", err)
 		}
 		if err := s.store.PutHistoryPoint(dp); err != nil {
-			log.Printf("save history point error: %v", err)
+			log.Printf("[Collect] 保存历史点失败: %v", err)
 		}
 
 		s.configMu.Lock()
@@ -304,7 +311,8 @@ func (s *Server) collectDataSource(ds DataSource) map[string]float64 {
 
 func (s *Server) collectShellCached(ds DataSource, shellCache map[string]string) map[string]float64 {
 	if raw, ok := shellCache[ds.ShellCommand]; ok {
-		val := parseValue(raw, ds.Rule)
+		log.Printf("[Shell] 使用缓存数据，命令: %s", ds.ShellCommand)
+		val := parseValue(raw, ds.Rule, ds.Name)
 		if math.IsNaN(val) {
 			return nil
 		}
@@ -313,11 +321,13 @@ func (s *Server) collectShellCached(ds DataSource, shellCache map[string]string)
 	sc := collector.NewShellCollector(ds.ShellCommand)
 	raw, err := sc.Execute()
 	if err != nil {
+		log.Printf("[Shell] 执行命令失败: %v", err)
 		return nil
 	}
 	shellCache[ds.ShellCommand] = raw
-	val := parseValue(raw, ds.Rule)
+	val := parseValue(raw, ds.Rule, ds.Name)
 	if math.IsNaN(val) {
+		log.Printf("[Shell] 解析失败，原始数据: %s, 规则: %s", raw, ds.Rule)
 		return nil
 	}
 	return map[string]float64{ds.Name: val}
@@ -325,7 +335,8 @@ func (s *Server) collectShellCached(ds DataSource, shellCache map[string]string)
 
 func (s *Server) collectTCPCached(ds DataSource, tcpCache map[string]string) map[string]float64 {
 	if raw, ok := tcpCache[ds.TCPAddress]; ok {
-		val := parseValue(raw, ds.Rule)
+		log.Printf("[TCP] 使用缓存数据，地址: %s", ds.TCPAddress)
+		val := parseValue(raw, ds.Rule, ds.Name)
 		if math.IsNaN(val) {
 			return nil
 		}
@@ -340,11 +351,13 @@ func (s *Server) collectTCPCached(ds DataSource, tcpCache map[string]string) map
 	s.tcpMu.Unlock()
 	raw, err := tc.Read()
 	if err != nil {
+		log.Printf("[TCP] 读取失败: %v", err)
 		return nil
 	}
 	tcpCache[ds.TCPAddress] = raw
-	val := parseValue(raw, ds.Rule)
+	val := parseValue(raw, ds.Rule, ds.Name)
 	if math.IsNaN(val) {
+		log.Printf("[TCP] 解析失败，原始数据: %s, 规则: %s", raw, ds.Rule)
 		return nil
 	}
 	return map[string]float64{ds.Name: val}
@@ -378,7 +391,7 @@ func (s *Server) collectShell(ds DataSource) map[string]float64 {
 	if err != nil {
 		return nil
 	}
-	val := parseValue(raw, ds.Rule)
+	val := parseValue(raw, ds.Rule, ds.Name)
 	if math.IsNaN(val) {
 		return nil
 	}
@@ -397,86 +410,127 @@ func (s *Server) collectTCP(ds DataSource) map[string]float64 {
 	if err != nil {
 		return nil
 	}
-	val := parseValue(raw, ds.Rule)
+	val := parseValue(raw, ds.Rule, ds.Name)
 	if math.IsNaN(val) {
 		return nil
 	}
 	return map[string]float64{ds.Name: val}
 }
 
-func parseValue(raw, rule string) float64 {
+func parseValue(raw, rule, dsName string) float64 {
 	raw = strings.TrimSpace(raw)
+	log.Printf("[Parse] 数据源: %s, 规则: %s, 原始数据长度: %d", dsName, rule, len(raw))
+	if len(raw) > 0 {
+		log.Printf("[Parse] 原始数据(前200字符): %s", truncate(raw, 200))
+	}
+
 	if rule == "self" || rule == "" {
+		log.Printf("[Parse] 使用 self 规则")
 		v, err := strconv.ParseFloat(raw, 64)
 		if err == nil {
+			log.Printf("[Parse] 解析成功: %f", v)
 			return v
 		}
+		log.Printf("[Parse] self 规则解析失败: %v", err)
 		return math.NaN()
 	}
 	if strings.HasPrefix(rule, "regex:") {
+		log.Printf("[Parse] 使用 regex 规则: %s", rule)
 		pattern := rule[6:]
 		re, err := regexp.Compile(pattern)
 		if err != nil {
+			log.Printf("[Parse] 正则编译失败: %v", err)
 			return math.NaN()
 		}
 		matches := re.FindStringSubmatch(raw)
+		log.Printf("[Parse] 正则匹配结果: %v", matches)
 		if len(matches) >= 2 {
 			v, err := strconv.ParseFloat(matches[1], 64)
 			if err == nil {
+				log.Printf("[Parse] 解析成功: %f", v)
 				return v
 			}
+			log.Printf("[Parse] 正则组解析失败: %v", err)
 		}
 		return math.NaN()
 	}
 	if strings.HasPrefix(rule, "split:") {
+		log.Printf("[Parse] 使用 split 规则: %s", rule)
 		parts := strings.SplitN(rule, ":", 3)
 		if len(parts) >= 3 {
 			sep := parts[1]
 			idx, err := strconv.Atoi(parts[2])
 			if err != nil {
+				log.Printf("[Parse] split 索引解析失败: %v", err)
 				return math.NaN()
 			}
 			fields := strings.Split(raw, sep)
+			log.Printf("[Parse] split 结果: %v", fields)
 			if idx >= 0 && idx < len(fields) {
 				v, err := strconv.ParseFloat(strings.TrimSpace(fields[idx]), 64)
 				if err == nil {
+					log.Printf("[Parse] 解析成功: %f", v)
 					return v
 				}
+				log.Printf("[Parse] split 字段解析失败: %v", err)
+			} else {
+				log.Printf("[Parse] split 索引越界: %d >= %d", idx, len(fields))
 			}
+		} else {
+			log.Printf("[Parse] split 规则格式错误")
 		}
 		return math.NaN()
 	}
 	if strings.HasPrefix(rule, "json:") {
+		log.Printf("[Parse] 使用 json 规则: %s", rule)
 		path := rule[5:]
 		var data map[string]interface{}
 		if err := json.Unmarshal([]byte(raw), &data); err != nil {
+			log.Printf("[Parse] JSON 解析失败: %v", err)
 			return math.NaN()
 		}
+		log.Printf("[Parse] JSON 解析成功: %v", data)
 		parts := strings.Split(path, ".")
 		var current interface{} = data
 		for _, p := range parts {
 			if m, ok := current.(map[string]interface{}); ok {
 				current = m[p]
 			} else {
+				log.Printf("[Parse] JSON 路径不存在: %s", p)
 				return math.NaN()
 			}
 		}
 		switch v := current.(type) {
 		case float64:
+			log.Printf("[Parse] 解析成功: %f", v)
 			return v
 		case string:
 			f, err := strconv.ParseFloat(v, 64)
 			if err == nil {
+				log.Printf("[Parse] 字符串转数字成功: %f", f)
 				return f
 			}
+			log.Printf("[Parse] 字符串转数字失败: %v", err)
+		default:
+			log.Printf("[Parse] JSON 值类型不支持: %T", v)
 		}
 		return math.NaN()
 	}
+	log.Printf("[Parse] 尝试直接解析")
 	v, err := strconv.ParseFloat(raw, 64)
 	if err == nil {
+		log.Printf("[Parse] 解析成功: %f", v)
 		return v
 	}
+	log.Printf("[Parse] 所有规则解析失败")
 	return math.NaN()
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
