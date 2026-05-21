@@ -209,6 +209,7 @@ var C=null,S={},RI=2000,RT=null,ACT=null,QCID=null,QTS=null;
 var LXM=null,LXX=null,ZNG=false,SUP=false,DSD=[];
 var CL=['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#84cc16'];
 function Q(s){return"'"+s+"'";}
+function HE(s){if(!s)return'';return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 var d=new Date();d.setHours(d.getHours()-1);
 document.getElementById('h-since').value=d.toISOString().slice(0,16);
 document.getElementById('h-until').value=(new Date()).toISOString().slice(0,16);
@@ -369,7 +370,7 @@ h+='<div class="form-group"><label>Y轴最大</label><input type="number" value=
 h+='</div>';
 }else if(st==='shell'){
 h+='<div class="ds-row" style="margin-top:6px">';
-h+='<div class="form-group" style="grid-column:1/-1"><label>Shell命令</label><textarea onchange="G.upDS('+i+','+Q('shell_command')+',this.value)" style="font-family:monospace;min-height:80px">'+(d.shell_command||'')+'</textarea></div>';
+h+='<div class="form-group" style="grid-column:1/-1"><label>Shell命令</label><textarea onchange="G.upDS('+i+','+Q('shell_command')+',this.value)" style="font-family:monospace;min-height:80px">'+HE(d.shell_command||'')+'</textarea></div>';
 h+='<div class="form-group"><label>解析规则</label><input type="text" value="'+(d.rule||'self')+'" onchange="G.upDS('+i+','+Q('rule')+',this.value)"></div>';
 h+='</div>';
 }else if(st==='tcp'){
