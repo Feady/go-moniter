@@ -21,24 +21,25 @@ import (
 )
 
 type DataSource struct {
-	Name    string `json:"name"`
-	Rule    string `json:"rule"`
-	Color   string `json:"color"`
-	Unit    string `json:"unit"`
-	YAxisID string `json:"y_axis_id"`
+	Name         string  `json:"name"`
+	SourceType   string  `json:"source_type"`
+	Rule         string  `json:"rule,omitempty"`
+	Color        string  `json:"color"`
+	Unit         string  `json:"unit"`
+	YAxisID      string  `json:"y_axis_id"`
+	MetricType   string  `json:"metric_type,omitempty"`
+	CPUUnit      string  `json:"cpu_unit,omitempty"`
+	ShellCommand string  `json:"shell_command,omitempty"`
+	TCPAddress   string  `json:"tcp_address,omitempty"`
+	YMin         float64 `json:"y_min"`
+	YMax         float64 `json:"y_max"`
 }
 
 type ChartConfig struct {
 	ID              string       `json:"id"`
 	Name            string       `json:"name"`
-	Type            string       `json:"type"`
 	Enabled         bool         `json:"enabled"`
 	Protected       bool         `json:"protected,omitempty"`
-	MetricType      string       `json:"metric_type,omitempty"`
-	CPUUnit         string       `json:"cpu_unit,omitempty"`
-	SourceType      string       `json:"source_type,omitempty"`
-	ShellCommand    string       `json:"shell_command,omitempty"`
-	TCPAddress      string       `json:"tcp_address,omitempty"`
 	Interval        int          `json:"interval"`
 	RefreshInterval int          `json:"refresh_interval"`
 	DataSources     []DataSource `json:"data_sources"`
@@ -61,8 +62,9 @@ type FullConfig struct {
 }
 
 type chartExportData struct {
-	Name   string
-	Charts []*storage.DataPoint
+	Name        string
+	Charts      []*storage.DataPoint
+	Annotations []*storage.Annotation
 }
 
 type Server struct {
@@ -91,7 +93,6 @@ func New(store *storage.Store, sysCol *collector.SystemCollector, webContent []b
 func (s *Server) loadConfig() {
 	data, err := s.store.LoadConfig()
 	if err != nil {
-		log.Printf("load config error: %v", err)
 		s.config = defaultConfig()
 		return
 	}
@@ -113,9 +114,6 @@ func (s *Server) loadConfig() {
 		}
 		if cfg.Charts[i].RefreshInterval < 1 {
 			cfg.Charts[i].RefreshInterval = 1
-		}
-		if len(cfg.Charts[i].DataSources) == 0 && cfg.Charts[i].Type == "system" {
-			cfg.Charts[i].DataSources = defaultDataSources(cfg.Charts[i].MetricType, cfg.Charts[i].CPUUnit)
 		}
 	}
 	s.configMu.Lock()
@@ -148,47 +146,35 @@ func defaultConfig() *FullConfig {
 		Port: 8080,
 		Charts: []ChartConfig{
 			{
-				ID: "cpu", Name: "CPU 负载", Type: "system", Enabled: true, Protected: true,
-				MetricType: "cpu", CPUUnit: "percent",
+				ID: "cpu", Name: "CPU", Enabled: true, Protected: true,
 				Interval: 2, RefreshInterval: 2, AutoRefresh: true,
 				DataSources: []DataSource{
-					{Name: "CPU使用率", Rule: "self", Color: "#3b82f6", Unit: "%", YAxisID: "y-cpu"},
+					{
+						Name: "CPU使用率", SourceType: "system", Rule: "self",
+						Color: "#3b82f6", Unit: "%", YAxisID: "y-cpu",
+						MetricType: "cpu", CPUUnit: "percent", YMin: 0, YMax: 100,
+					},
 				},
 			},
 			{
-				ID: "memory", Name: "内存", Type: "system", Enabled: true, Protected: true,
-				MetricType: "memory",
+				ID: "memory", Name: "内存", Enabled: true, Protected: true,
 				Interval: 2, RefreshInterval: 2, AutoRefresh: true,
 				DataSources: []DataSource{
-					{Name: "使用率", Rule: "self", Color: "#3b82f6", Unit: "%", YAxisID: "y-mem-percent"},
-					{Name: "已用(GB)", Rule: "self", Color: "#22c55e", Unit: "GB", YAxisID: "y-mem-gb"},
+					{
+						Name: "使用率", SourceType: "system", Rule: "self",
+						Color: "#3b82f6", Unit: "%", YAxisID: "y-mem-percent",
+						MetricType: "memory", YMin: 0, YMax: 100,
+					},
+					{
+						Name: "已用(GB)", SourceType: "system", Rule: "self",
+						Color: "#22c55e", Unit: "GB", YAxisID: "y-mem-gb",
+						MetricType: "memory",
+					},
 				},
 			},
 		},
 		CommandButtons: []CommandButton{},
 	}
-}
-
-func defaultDataSources(metricType, cpuUnit string) []DataSource {
-	switch metricType {
-	case "cpu":
-		if cpuUnit == "load" {
-			return []DataSource{
-				{Name: "Load1", Rule: "self", Color: "#3b82f6", Unit: "", YAxisID: "y-cpu"},
-				{Name: "Load5", Rule: "self", Color: "#22c55e", Unit: "", YAxisID: "y-cpu"},
-				{Name: "Load15", Rule: "self", Color: "#f59e0b", Unit: "", YAxisID: "y-cpu"},
-			}
-		}
-		return []DataSource{
-			{Name: "CPU使用率", Rule: "self", Color: "#3b82f6", Unit: "%", YAxisID: "y-cpu"},
-		}
-	case "memory":
-		return []DataSource{
-			{Name: "使用率", Rule: "self", Color: "#3b82f6", Unit: "%", YAxisID: "y-mem-percent"},
-			{Name: "已用(GB)", Rule: "self", Color: "#22c55e", Unit: "GB", YAxisID: "y-mem-gb"},
-		}
-	}
-	return nil
 }
 
 func (s *Server) SetPort(port int) {
@@ -205,7 +191,6 @@ func (s *Server) Start() {
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/data", s.handleData)
 	mux.HandleFunc("/api/data/clear", s.handleClearData)
-	mux.HandleFunc("/api/data/all", s.handleAllData)
 	mux.HandleFunc("/api/history", s.handleHistory)
 	mux.HandleFunc("/api/history/clear", s.handleClearHistory)
 	mux.HandleFunc("/api/command", s.handleCommand)
@@ -255,14 +240,14 @@ func (s *Server) collectAndSave() {
 			continue
 		}
 
-		var values map[string]float64
-		switch chart.Type {
-		case "system":
-			values = s.collectSystem(chart)
-		case "custom":
-			values = s.collectCustom(chart)
+		values := make(map[string]float64)
+		for _, ds := range chart.DataSources {
+			dsVals := s.collectDataSource(ds)
+			for k, v := range dsVals {
+				values[k] = v
+			}
 		}
-		if values == nil || len(values) == 0 {
+		if len(values) == 0 {
 			continue
 		}
 
@@ -289,11 +274,23 @@ func (s *Server) collectAndSave() {
 	}
 }
 
-func (s *Server) collectSystem(chart ChartConfig) map[string]float64 {
+func (s *Server) collectDataSource(ds DataSource) map[string]float64 {
+	switch ds.SourceType {
+	case "system":
+		return s.collectSystem(ds)
+	case "shell":
+		return s.collectShell(ds)
+	case "tcp":
+		return s.collectTCP(ds)
+	}
+	return nil
+}
+
+func (s *Server) collectSystem(ds DataSource) map[string]float64 {
 	values := make(map[string]float64)
-	switch chart.MetricType {
+	switch ds.MetricType {
 	case "cpu":
-		if chart.CPUUnit == "load" {
+		if ds.CPUUnit == "load" {
 			values["Load1"] = s.sysCollector.GetLoad1()
 			values["Load5"] = s.sysCollector.GetLoad5()
 			values["Load15"] = s.sysCollector.GetLoad15()
@@ -304,57 +301,48 @@ func (s *Server) collectSystem(chart ChartConfig) map[string]float64 {
 		values["使用率"] = s.sysCollector.GetMemPercent()
 		values["已用(GB)"] = math.Round(s.sysCollector.GetMemUsed()*100) / 100
 	}
-	return values
+	result := make(map[string]float64)
+	if v, ok := values[ds.Name]; ok {
+		result[ds.Name] = v
+	}
+	return result
 }
 
-func (s *Server) collectCustom(chart ChartConfig) map[string]float64 {
-	values := make(map[string]float64)
-	var raw string
-	var err error
-
-	switch chart.SourceType {
-	case "shell":
-		sc := collector.NewShellCollector(chart.ShellCommand)
-		raw, err = sc.Execute()
-	case "tcp":
-		s.tcpMu.Lock()
-		tc, exists := s.tcpCollectors[chart.ID]
-		if !exists {
-			tc = collector.NewTCPCollector(chart.TCPAddress)
-			s.tcpCollectors[chart.ID] = tc
-		}
-		s.tcpMu.Unlock()
-		raw, err = tc.Read()
-	case "system_ref":
-		sysVals := s.collectSystem(chart)
-		if len(sysVals) == 0 {
-			return nil
-		}
-		for _, ds := range chart.DataSources {
-			if v, ok := sysVals[ds.Name]; ok {
-				values[ds.Name] = v
-			}
-		}
-		return values
-	}
-
+func (s *Server) collectShell(ds DataSource) map[string]float64 {
+	sc := collector.NewShellCollector(ds.ShellCommand)
+	raw, err := sc.Execute()
 	if err != nil {
-		log.Printf("collect %s error: %v", chart.ID, err)
 		return nil
 	}
-
-	for _, ds := range chart.DataSources {
-		val := parseValue(raw, ds.Rule)
-		if !math.IsNaN(val) {
-			values[ds.Name] = val
-		}
+	val := parseValue(raw, ds.Rule)
+	if math.IsNaN(val) {
+		return nil
 	}
-	return values
+	return map[string]float64{ds.Name: val}
+}
+
+func (s *Server) collectTCP(ds DataSource) map[string]float64 {
+	s.tcpMu.Lock()
+	tc, exists := s.tcpCollectors[ds.Name]
+	if !exists {
+		tc = collector.NewTCPCollector(ds.TCPAddress)
+		s.tcpCollectors[ds.Name] = tc
+	}
+	s.tcpMu.Unlock()
+	raw, err := tc.Read()
+	if err != nil {
+		return nil
+	}
+	val := parseValue(raw, ds.Rule)
+	if math.IsNaN(val) {
+		return nil
+	}
+	return map[string]float64{ds.Name: val}
 }
 
 func parseValue(raw, rule string) float64 {
 	raw = strings.TrimSpace(raw)
-	if rule == "self" {
+	if rule == "self" || rule == "" {
 		v, err := strconv.ParseFloat(raw, 64)
 		if err == nil {
 			return v
@@ -470,6 +458,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			if cfg.Charts[i].ID == "cpu" || cfg.Charts[i].ID == "memory" {
 				cfg.Charts[i].Protected = true
 			}
+			for j := range cfg.Charts[i].DataSources {
+				if cfg.Charts[i].DataSources[j].SourceType == "" {
+					cfg.Charts[i].DataSources[j].SourceType = "system"
+				}
+			}
 		}
 		if cfg.Port <= 0 {
 			cfg.Port = 8080
@@ -514,35 +507,6 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 		points = points[len(points)-int(limit):]
 	}
 	json.NewEncoder(w).Encode(points)
-}
-
-func (s *Server) handleAllData(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	chartIDs := r.URL.Query()["chart_id"]
-	if len(chartIDs) == 0 {
-		http.Error(w, `{"error":"chart_id required"}`, 400)
-		return
-	}
-	var since, until int64
-	if sv := r.URL.Query().Get("since"); sv != "" {
-		since, _ = strconv.ParseInt(sv, 10, 64)
-	}
-	if uv := r.URL.Query().Get("until"); uv != "" {
-		until, _ = strconv.ParseInt(uv, 10, 64)
-	}
-
-	result := make(map[string][]*storage.DataPoint)
-	for _, cid := range chartIDs {
-		pts, err := s.store.GetDataPoints(cid, since, until)
-		if err != nil {
-			continue
-		}
-		if pts == nil {
-			pts = []*storage.DataPoint{}
-		}
-		result[cid] = pts
-	}
-	json.NewEncoder(w).Encode(result)
 }
 
 func (s *Server) handleClearData(w http.ResponseWriter, r *http.Request) {
@@ -693,10 +657,11 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	if err != nil || len(points) == 0 {
 		points, _ = s.store.GetDataPoints(chartID, 0, 0)
 	}
+	anns, _ := s.store.GetAnnotations(chartID)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.html", chartID))
-	io.WriteString(w, buildExportHTML(chartName, points))
+	io.WriteString(w, buildExportHTML(chartName, points, anns))
 }
 
 func (s *Server) handleExportAll(w http.ResponseWriter, r *http.Request) {
@@ -720,13 +685,13 @@ func (s *Server) handleExportAll(w http.ResponseWriter, r *http.Request) {
 	s.configMu.RUnlock()
 
 	exports := make(map[string]*chartExportData)
-
 	for _, cid := range enabledIDs {
 		pts, err := s.store.GetHistoryPoints(cid, since, until)
 		if err != nil || len(pts) == 0 {
 			pts, _ = s.store.GetDataPoints(cid, since, until)
 		}
-		exports[cid] = &chartExportData{Name: chartNames[cid], Charts: pts}
+		anns, _ := s.store.GetAnnotations(cid)
+		exports[cid] = &chartExportData{Name: chartNames[cid], Charts: pts, Annotations: anns}
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -734,11 +699,31 @@ func (s *Server) handleExportAll(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, buildExportAllHTML(exports))
 }
 
-func buildExportHTML(name string, points []*storage.DataPoint) string {
+func buildExportHTML(name string, points []*storage.DataPoint, anns []*storage.Annotation) string {
+	if len(points) == 0 {
+		return fmt.Sprintf(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>%s</title></head><body><h2>%s</h2><p>无数据</p></body></html>`, template.HTMLEscapeString(name), template.HTMLEscapeString(name))
+	}
+
+	type dsInfo struct {
+		Name  string
+		Color string
+		Unit  string
+	}
+	var dsList []dsInfo
+	dsSet := make(map[string]bool)
+	for _, dp := range points {
+		for k := range dp.Values {
+			if !dsSet[k] {
+				dsSet[k] = true
+				dsList = append(dsList, dsInfo{Name: k, Color: "", Unit: ""})
+			}
+		}
+	}
+
 	labels := []string{}
 	datasets := make(map[string][]float64)
 	for _, dp := range points {
-		t := time.UnixMilli(dp.Timestamp).Format("15:04:05")
+		t := time.UnixMilli(dp.Timestamp).Format("2006-01-02 15:04:05")
 		labels = append(labels, t)
 		for k, v := range dp.Values {
 			datasets[k] = append(datasets[k], v)
@@ -747,74 +732,107 @@ func buildExportHTML(name string, points []*storage.DataPoint) string {
 
 	colors := []string{"#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16"}
 
-	datasetJSON := ""
+	var datasetLines []string
 	i := 0
-	for dname, vals := range datasets {
-		if i > 0 {
-			datasetJSON += ","
+	for _, dsi := range dsList {
+		vals := datasets[dsi.Name]
+		if vals == nil {
+			continue
 		}
 		color := colors[i%len(colors)]
 		valsJSON, _ := json.Marshal(vals)
-		datasetJSON += fmt.Sprintf(`{label:"%s",data:%s,borderColor:"%s",backgroundColor:"%s",fill:false,tension:0.1}`,
-			dname, string(valsJSON), color, color)
+		datasetLines = append(datasetLines, fmt.Sprintf(`{label:"%s",data:%s,borderColor:"%s",backgroundColor:"%s",fill:false,tension:0.1,pointRadius:0}`,
+			dsi.Name, string(valsJSON), color, color))
 		i++
 	}
 	labelsJSON, _ := json.Marshal(labels)
 
+	var annLines []string
+	for _, a := range anns {
+		annLines = append(annLines, fmt.Sprintf(`{type:'line',xMin:%d,xMax:%d,borderColor:'%s',borderWidth:1,borderDash:[4,2],label:{display:true,content:'%s',position:'start',backgroundColor:'rgba(239,68,68,0.75)',color:'#fff',font:{size:10}}}`,
+			a.Timestamp, a.Timestamp, map[bool]string{true: "#f59e0b", false: "#ef4444"}[a.Pinned], template.JSEscapeString(a.Text)))
+	}
+	annJSON := strings.Join(annLines, ",")
+
 	return fmt.Sprintf(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>%s</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-</head><body><div style="max-width:1200px;margin:auto"><canvas id="chart"></canvas></div>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<style>body{max-width:1200px;margin:auto;padding:20px;background:#fff;font-family:sans-serif}</style></head><body>
+<h2>%s</h2><div style="height:600px"><canvas id="chart" style="height:100%%"></canvas></div>
 <script>
 new Chart(document.getElementById('chart'),{type:'line',data:{labels:%s,datasets:[%s]},
-options:{responsive:true,scales:{x:{title:{display:true,text:'时间'}},y:{title:{display:true,text:'值'}}}}});
-</script></body></html>`, template.HTMLEscapeString(name), string(labelsJSON), datasetJSON)
+options:{responsive:true,maintainAspectRatio:false,plugins:{annotation:{annotations:[%s]}},
+scales:{x:{type:'time',time:{tooltipFormat:'yyyy-MM-dd HH:mm:ss'},title:{display:true,text:'时间'}},y:{title:{display:true,text:'值'}}}}});
+</script></body></html>`, template.HTMLEscapeString(name), template.HTMLEscapeString(name), string(labelsJSON), strings.Join(datasetLines, ","), annJSON)
 }
 
 func buildExportAllHTML(exports map[string]*chartExportData) string {
 	var sections strings.Builder
 	colors := []string{"#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16"}
-	chartID := 1
+	chartIdx := 1
 
 	for _, exp := range exports {
 		if len(exp.Charts) == 0 {
 			continue
 		}
+		type dsInfo struct{ Name string }
+		var dsList []dsInfo
+		dsSet := make(map[string]bool)
+		for _, dp := range exp.Charts {
+			for k := range dp.Values {
+				if !dsSet[k] {
+					dsSet[k] = true
+					dsList = append(dsList, dsInfo{Name: k})
+				}
+			}
+		}
 		labels := []string{}
 		datasets := make(map[string][]float64)
 		for _, dp := range exp.Charts {
-			t := time.UnixMilli(dp.Timestamp).Format("15:04:05")
+			t := time.UnixMilli(dp.Timestamp).Format("2006-01-02 15:04:05")
 			labels = append(labels, t)
 			for k, v := range dp.Values {
 				datasets[k] = append(datasets[k], v)
 			}
 		}
-		datasetJSON := ""
+		var datasetLines []string
 		i := 0
-		for dname, vals := range datasets {
-			if i > 0 {
-				datasetJSON += ","
+		for _, dsi := range dsList {
+			vals := datasets[dsi.Name]
+			if vals == nil {
+				continue
 			}
 			color := colors[i%len(colors)]
 			valsJSON, _ := json.Marshal(vals)
-			datasetJSON += fmt.Sprintf(`{label:"%s",data:%s,borderColor:"%s",backgroundColor:"%s",fill:false,tension:0.1}`,
-				dname, string(valsJSON), color, color)
+			datasetLines = append(datasetLines, fmt.Sprintf(`{label:"%s",data:%s,borderColor:"%s",backgroundColor:"%s",fill:false,tension:0.1,pointRadius:0}`,
+				dsi.Name, string(valsJSON), color, color))
 			i++
 		}
 		labelsJSON, _ := json.Marshal(labels)
 
-		sections.WriteString(fmt.Sprintf(`<h2 style="color:#333;font-family:sans-serif">%s</h2>
-<div style="margin-bottom:24px"><canvas id="chart%d" style="max-height:300px"></canvas></div>
+		var annLines []string
+		for _, a := range exp.Annotations {
+			annLines = append(annLines, fmt.Sprintf(`{type:'line',xMin:%d,xMax:%d,borderColor:'%s',borderWidth:1,borderDash:[4,2],label:{display:true,content:'%s',position:'start',backgroundColor:'rgba(239,68,68,0.75)',color:'#fff',font:{size:10}}}`,
+				a.Timestamp, a.Timestamp, map[bool]string{true: "#f59e0b", false: "#ef4444"}[a.Pinned], template.JSEscapeString(a.Text)))
+		}
+		annJSON := strings.Join(annLines, ",")
+
+		sections.WriteString(fmt.Sprintf(`<h2>%s</h2><div style="height:500px"><canvas id="chart%d" style="height:100%%"></canvas></div>
 <script>
 new Chart(document.getElementById('chart%d'),{type:'line',data:{labels:%s,datasets:[%s]},
-options:{responsive:true,maintainAspectRatio:false,scales:{x:{title:{display:true,text:'时间'}},y:{title:{display:true,text:'值'}}}}});
+options:{responsive:true,maintainAspectRatio:false,plugins:{annotation:{annotations:[%s]}},
+scales:{x:{type:'time',time:{tooltipFormat:'yyyy-MM-dd HH:mm:ss'},title:{display:true,text:'时间'}},y:{title:{display:true,text:'值'}}}}});
 </script>`,
-			template.HTMLEscapeString(exp.Name), chartID, chartID, string(labelsJSON), datasetJSON))
-		chartID++
+			template.HTMLEscapeString(exp.Name), chartIdx, chartIdx, string(labelsJSON), strings.Join(datasetLines, ","), annJSON))
+		chartIdx++
 	}
 
 	return fmt.Sprintf(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>GoMoniter Export</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<style>body{max-width:1200px;margin:auto;padding:20px;background:#fff}</style></head><body>%s</body></html>`,
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<style>body{max-width:1200px;margin:auto;padding:20px;background:#fff;font-family:sans-serif}h2{color:#333}</style></head><body>%s</body></html>`,
 		sections.String())
 }
 
