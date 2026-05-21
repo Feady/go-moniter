@@ -607,6 +607,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	chartID := r.URL.Query().Get("chart_id")
+	log.Printf("[API] handleData 被调用, chart_id=%s", chartID)
 	var since, until, limit int64
 	if sv := r.URL.Query().Get("since"); sv != "" {
 		since, _ = strconv.ParseInt(sv, 10, 64)
@@ -620,15 +621,23 @@ func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
 
 	points, err := s.store.GetDataPoints(chartID, since, until)
 	if err != nil {
+		log.Printf("[API] 获取数据失败: %v", err)
 		http.Error(w, `{"error":"`+err.Error()+`"}`, 500)
 		return
 	}
 	if points == nil {
 		points = []*storage.DataPoint{}
 	}
+	log.Printf("[API] 查询到 %d 个数据点, chart_id=%s", len(points), chartID)
+	for i, p := range points {
+		if i < 3 { // 只打印前3个
+			log.Printf("[API] 数据点[%d]: timestamp=%d, values=%v", i, p.Timestamp, p.Values)
+		}
+	}
 	if limit > 0 && int64(len(points)) > limit {
 		points = points[len(points)-int(limit):]
 	}
+	log.Printf("[API] 返回 %d 个数据点", len(points))
 	json.NewEncoder(w).Encode(points)
 }
 
