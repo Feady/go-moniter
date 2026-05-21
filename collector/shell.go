@@ -26,12 +26,10 @@ func (sc *ShellCollector) Execute() (string, error) {
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		// Windows: 使用 cmd.exe 处理多行命令
 		cmd = exec.CommandContext(ctx, "cmd.exe")
 		cmd.Stdin = bytes.NewBufferString(sc.command + "\n")
 	} else {
-		// Linux/macOS: 使用 sh -c 或直接 bash -c
-		cmd = exec.CommandContext(ctx, "sh", "-c", sc.command)
+		cmd = exec.CommandContext(ctx, "bash", "-c", sc.command)
 	}
 
 	var stdout bytes.Buffer
