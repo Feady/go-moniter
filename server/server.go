@@ -347,6 +347,7 @@ func (s *Server) collectTCPCached(ds DataSource, tcpCache map[string]string) map
 	if !exists {
 		tc = collector.NewTCPCollector(ds.TCPAddress)
 		s.tcpCollectors[ds.Name] = tc
+		tc.Start()
 	}
 	s.tcpMu.Unlock()
 	raw, err := tc.Read()
