@@ -255,15 +255,35 @@ cAC();lAC();LXM=null;LXX=null;sRS();setTimeout(function(){G.autoFit();},500);
 }
 
 function myA(sr){
+console.log('[前端] myA 被调用, 数据源:', sr);
 var ys=new Set(sr.map(function(d){return d.y_axis_id||'y';}));
 var ax={},idx=0;
 ys.forEach(function(id){
 var sm=sr.filter(function(d){return(d.y_axis_id||'y')===id;});
 var ym=sm.find(function(d){return d.y_min!=null&&d.y_min!==undefined;});
 var yx=sm.find(function(d){return d.y_max!=null&&d.y_max!==undefined;});
+console.log('[前端] Y轴 '+id+': y_min=', ym?ym.y_min:null, ', y_max=', yx?yx.y_max:null);
 ax[id]={type:'linear',display:true,position:idx%2===0?'left':'right',title:{display:true,text:'',color:'#94a3b8'},grid:{drawOnChartArea:idx===0,color:'#1e2d3d'},ticks:{color:'#94a3b8',font:{size:9}}};
-if(ym&&ym.y_min!=null){ax[id].min=ym.y_min;}
-if(yx&&yx.y_max!=null){ax[id].max=yx.y_max;}
+var useMin=false,useMax=false;
+if(ym&&ym.y_min!=null){useMin=true;}
+if(yx&&yx.y_max!=null){useMax=true;}
+if(useMin&&useMax){
+if(ym.y_min<yx.y_max){
+console.log('[前端] 设置Y轴范围:', id,': min=',ym.y_min,', max=', yx.y_max);
+ax[id].min=ym.y_min;
+ax[id].max=yx.y_max;
+}else{
+console.log('[前端] Y轴范围无效，自动处理');
+}
+}else if(useMin){
+console.log('[前端] 只设置Y轴 min=', ym.y_min);
+ax[id].min=ym.y_min;
+}else if(useMax){
+console.log('[前端] 只设置Y轴 max=', yx.y_max);
+ax[id].max=yx.y_max;
+}else{
+console.log('[前端] Y轴范围自动');
+}
 if(idx>0)ax[id].grid={drawOnChartArea:false,color:'#1e2d3d'};
 idx++;
 });
