@@ -354,6 +354,10 @@ func (s *Server) collectTCPCached(ds DataSource, tcpCache map[string]string) map
 		log.Printf("[TCP] 读取失败: %v", err)
 		return nil
 	}
+	if raw == "" {
+		log.Printf("[TCP] 数据为空，等待服务器推送")
+		return nil
+	}
 	tcpCache[ds.TCPAddress] = raw
 	val := parseValue(raw, ds.Rule, ds.Name)
 	if math.IsNaN(val) {
