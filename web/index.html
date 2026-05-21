@@ -450,7 +450,16 @@ G.editCmd=function(id){G.openCmdEditor(id);};
 
 G.loadHistory=async function(){var sn=new Date(document.getElementById('h-since').value).getTime(),un=new Date(document.getElementById('h-until').value).getTime(),c=document.getElementById('history-charts');if(!C||!C.charts){c.innerHTML='<div class="empty-state">无图表配置</div>';return;}var en=C.charts.filter(function(x){return x.enabled;});if(!en.length){c.innerHTML='<div class="empty-state">没有启用的图表</div>';return;}c.innerHTML='<div class="empty-state">加载中...</div>';var h='';for(var i=0;i<en.length;i++){h+='<div class="history-chart-panel"><h3>'+en[i].name+'</h3><div class="history-chart-wrapper"><canvas id="hchart-'+en[i].id+'"></canvas></div></div>';}c.innerHTML=h;for(var i=0;i<en.length;i++){var ps=await api('/api/history?chart_id='+en[i].id+'&since='+(sn||0)+'&until='+(un||Date.now()));setTimeout(function(ch,ps){mHC(ch,ps);},50,en[i],ps);}};
 function mHC(ch,ps){var cv=document.getElementById('hchart-'+ch.id);if(!cv||!ps||!ps.length)return;var ya=myA(ch.data_sources);var ds=ch.data_sources.map(function(d,i){return{label:d.name,data:[],borderColor:d.color||CL[i%CL.length],backgroundColor:d.color||CL[i%CL.length],fill:false,tension:0.2,pointRadius:1,yAxisID:d.y_axis_id||'y'};});ch.data_sources.forEach(function(d,i){var data=[];ps.forEach(function(p){var v=p.values[d.name];if(v!==undefined)data.push({x:p.timestamp,y:v});});ds[i].data=data;});new Chart(cv,{type:'line',data:{datasets:ds},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{tooltip:{mode:'nearest',intersect:false},legend:{position:'bottom',labels:{boxWidth:8,font:{size:10},color:'#94a3b8'}}},scales:{x:{type:'time',time:{displayFormats:{minute:'HH:mm',hour:'MM-dd HH:mm'}},ticks:{color:'#64748b',font:{size:9},maxTicksLimit:12},grid:{color:'#1e2d3d'}},...ya}}});}
-G.exportHistory=function(){window.open('/api/export/all','_blank');};
+G.exportHistory=function(){
+var sn=new Date(document.getElementById('h-since').value).getTime();
+var un=new Date(document.getElementById('h-until').value).getTime();
+var url='/api/export/all';
+var params=[];
+if(sn)params.push('since='+sn);
+if(un)params.push('until='+un);
+if(params.length>0)url+='?'+params.join('&');
+window.open(url,'_blank');
+};
 G.clearHistory=async function(){if(!C||!C.charts)return;if(!confirm('确定清理所有历史数据？此操作不可撤销。'))return;await api('/api/history/clear',{method:'DELETE'});G.loadHistory();};
 
 loadCfg();
