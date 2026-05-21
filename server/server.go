@@ -231,6 +231,10 @@ func (s *Server) collectAndSave() {
 	copy(charts, s.config.Charts)
 	s.configMu.RUnlock()
 
+	// 缓存采集结果：shell命令->输出，tcp地址->输出
+	shellCache := make(map[string]string)
+	tcpCache := make(map[string]string)
+
 	for _, chart := range charts {
 		if !chart.Enabled {
 			continue
@@ -242,7 +246,7 @@ func (s *Server) collectAndSave() {
 
 		values := make(map[string]float64)
 		for _, ds := range chart.DataSources {
-			dsVals := s.collectDataSource(ds)
+			dsVals := s.collectDataSourceCached(ds, shellCache, tcpCache)
 			for k, v := range dsVals {
 				values[k] = v
 			}
@@ -274,6 +278,18 @@ func (s *Server) collectAndSave() {
 	}
 }
 
+func (s *Server) collectDataSourceCached(ds DataSource, shellCache, tcpCache map[string]string) map[string]float64 {
+	switch ds.SourceType {
+	case "system":
+		return s.collectSystem(ds)
+	case "shell":
+		return s.collectShellCached(ds, shellCache)
+	case "tcp":
+		return s.collectTCPCached(ds, tcpCache)
+	}
+	return nil
+}
+
 func (s *Server) collectDataSource(ds DataSource) map[string]float64 {
 	switch ds.SourceType {
 	case "system":
@@ -284,6 +300,54 @@ func (s *Server) collectDataSource(ds DataSource) map[string]float64 {
 		return s.collectTCP(ds)
 	}
 	return nil
+}
+
+func (s *Server) collectShellCached(ds DataSource, shellCache map[string]string) map[string]float64 {
+	if raw, ok := shellCache[ds.ShellCommand]; ok {
+		val := parseValue(raw, ds.Rule)
+		if math.IsNaN(val) {
+			return nil
+		}
+		return map[string]float64{ds.Name: val}
+	}
+	sc := collector.NewShellCollector(ds.ShellCommand)
+	raw, err := sc.Execute()
+	if err != nil {
+		return nil
+	}
+	shellCache[ds.ShellCommand] = raw
+	val := parseValue(raw, ds.Rule)
+	if math.IsNaN(val) {
+		return nil
+	}
+	return map[string]float64{ds.Name: val}
+}
+
+func (s *Server) collectTCPCached(ds DataSource, tcpCache map[string]string) map[string]float64 {
+	if raw, ok := tcpCache[ds.TCPAddress]; ok {
+		val := parseValue(raw, ds.Rule)
+		if math.IsNaN(val) {
+			return nil
+		}
+		return map[string]float64{ds.Name: val}
+	}
+	s.tcpMu.Lock()
+	tc, exists := s.tcpCollectors[ds.Name]
+	if !exists {
+		tc = collector.NewTCPCollector(ds.TCPAddress)
+		s.tcpCollectors[ds.Name] = tc
+	}
+	s.tcpMu.Unlock()
+	raw, err := tc.Read()
+	if err != nil {
+		return nil
+	}
+	tcpCache[ds.TCPAddress] = raw
+	val := parseValue(raw, ds.Rule)
+	if math.IsNaN(val) {
+		return nil
+	}
+	return map[string]float64{ds.Name: val}
 }
 
 func (s *Server) collectSystem(ds DataSource) map[string]float64 {

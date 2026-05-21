@@ -369,7 +369,7 @@ h+='<div class="form-group"><label>Y轴最大</label><input type="number" value=
 h+='</div>';
 }else if(st==='shell'){
 h+='<div class="ds-row" style="margin-top:6px">';
-h+='<div class="form-group"><label>Shell命令</label><input type="text" value="'+(d.shell_command||'')+'" onchange="G.upDS('+i+','+Q('shell_command')+',this.value)" style="font-family:monospace"></div>';
+h+='<div class="form-group" style="grid-column:1/-1"><label>Shell命令</label><textarea onchange="G.upDS('+i+','+Q('shell_command')+',this.value)" style="font-family:monospace;min-height:80px">'+(d.shell_command||'')+'</textarea></div>';
 h+='<div class="form-group"><label>解析规则</label><input type="text" value="'+(d.rule||'self')+'" onchange="G.upDS('+i+','+Q('rule')+',this.value)"></div>';
 h+='</div>';
 }else if(st==='tcp'){
