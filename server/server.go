@@ -232,7 +232,27 @@ func (s *Server) collectAndSave() {
 	s.configMu.RUnlock()
 
 	shellCache := make(map[string]string)
-	tcpCache := make(map[string]string)
+
+	enabledTCPNames := make(map[string]bool)
+	for _, chart := range charts {
+		if chart.Enabled {
+			for _, ds := range chart.DataSources {
+				if ds.SourceType == "tcp" {
+					enabledTCPNames[ds.Name] = true
+				}
+			}
+		}
+	}
+
+	s.tcpMu.Lock()
+	for name, tc := range s.tcpCollectors {
+		if !enabledTCPNames[name] {
+			log.Printf("[TCP] 关闭未使用的连接: %s", name)
+			tc.Close()
+			delete(s.tcpCollectors, name)
+		}
+	}
+	s.tcpMu.Unlock()
 
 	for _, chart := range charts {
 		if !chart.Enabled {
@@ -248,7 +268,12 @@ func (s *Server) collectAndSave() {
 		values := make(map[string]float64)
 		for _, ds := range chart.DataSources {
 			log.Printf("[Collect] 处理数据源: %s (类型: %s)", ds.Name, ds.SourceType)
-			dsVals := s.collectDataSourceCached(ds, shellCache, tcpCache)
+			var dsVals map[string]float64
+			if ds.SourceType == "tcp" {
+				dsVals = s.collectTCP(ds)
+			} else {
+				dsVals = s.collectDataSourceCached(ds, shellCache, nil)
+			}
 			for k, v := range dsVals {
 				values[k] = v
 				log.Printf("[Collect] 获取值: %s = %f", k, v)
@@ -291,8 +316,6 @@ func (s *Server) collectDataSourceCached(ds DataSource, shellCache, tcpCache map
 		return s.collectSystem(ds)
 	case "shell":
 		return s.collectShellCached(ds, shellCache)
-	case "tcp":
-		return s.collectTCPCached(ds, tcpCache)
 	}
 	return nil
 }
@@ -328,41 +351,6 @@ func (s *Server) collectShellCached(ds DataSource, shellCache map[string]string)
 	val := parseValue(raw, ds.Rule, ds.Name)
 	if math.IsNaN(val) {
 		log.Printf("[Shell] 解析失败，原始数据: %s, 规则: %s", raw, ds.Rule)
-		return nil
-	}
-	return map[string]float64{ds.Name: val}
-}
-
-func (s *Server) collectTCPCached(ds DataSource, tcpCache map[string]string) map[string]float64 {
-	if raw, ok := tcpCache[ds.TCPAddress]; ok {
-		log.Printf("[TCP] 使用缓存数据，地址: %s", ds.TCPAddress)
-		val := parseValue(raw, ds.Rule, ds.Name)
-		if math.IsNaN(val) {
-			return nil
-		}
-		return map[string]float64{ds.Name: val}
-	}
-	s.tcpMu.Lock()
-	tc, exists := s.tcpCollectors[ds.Name]
-	if !exists {
-		tc = collector.NewTCPCollector(ds.TCPAddress)
-		s.tcpCollectors[ds.Name] = tc
-		tc.Start()
-	}
-	s.tcpMu.Unlock()
-	raw, err := tc.Read()
-	if err != nil {
-		log.Printf("[TCP] 读取失败: %v", err)
-		return nil
-	}
-	if raw == "" {
-		log.Printf("[TCP] 数据为空，等待服务器推送")
-		return nil
-	}
-	tcpCache[ds.TCPAddress] = raw
-	val := parseValue(raw, ds.Rule, ds.Name)
-	if math.IsNaN(val) {
-		log.Printf("[TCP] 解析失败，原始数据: %s, 规则: %s", raw, ds.Rule)
 		return nil
 	}
 	return map[string]float64{ds.Name: val}
@@ -409,14 +397,21 @@ func (s *Server) collectTCP(ds DataSource) map[string]float64 {
 	if !exists {
 		tc = collector.NewTCPCollector(ds.TCPAddress)
 		s.tcpCollectors[ds.Name] = tc
+		tc.Start()
 	}
 	s.tcpMu.Unlock()
 	raw, err := tc.Read()
 	if err != nil {
+		log.Printf("[TCP] 读取失败: %v", err)
+		return nil
+	}
+	if raw == "" {
+		log.Printf("[TCP] 数据为空，等待服务器推送")
 		return nil
 	}
 	val := parseValue(raw, ds.Rule, ds.Name)
 	if math.IsNaN(val) {
+		log.Printf("[TCP] 解析失败，原始数据: %s, 规则: %s", raw, ds.Rule)
 		return nil
 	}
 	return map[string]float64{ds.Name: val}
