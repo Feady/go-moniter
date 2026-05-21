@@ -274,6 +274,7 @@ func (s *Server) collectAndSave() {
 			} else {
 				dsVals = s.collectDataSourceCached(ds, shellCache, nil)
 			}
+			log.Printf("[Collect] 数据源 %s 返回结果: %v", ds.Name, dsVals)
 			for k, v := range dsVals {
 				values[k] = v
 				log.Printf("[Collect] 获取值: %s = %f", k, v)
@@ -282,6 +283,7 @@ func (s *Server) collectAndSave() {
 				log.Printf("[Collect] 数据源 %s 没有返回数据", ds.Name)
 			}
 		}
+		log.Printf("[Collect] 图表 %s 最终values map: %v", chart.Name, values)
 		if len(values) == 0 {
 			log.Printf("[Collect] 图表 %s 没有有效数据，跳过", chart.Name)
 			continue
@@ -292,6 +294,7 @@ func (s *Server) collectAndSave() {
 			Timestamp: nowMs,
 			Values:    values,
 		}
+		log.Printf("[Collect] 准备保存数据点: ChartID=%s, Timestamp=%d, Values=%v", dp.ChartID, dp.Timestamp, dp.Values)
 		if err := s.store.PutDataPoint(dp); err != nil {
 			log.Printf("[Collect] 保存数据点失败: %v", err)
 		}
@@ -409,11 +412,13 @@ func (s *Server) collectTCP(ds DataSource) map[string]float64 {
 		log.Printf("[TCP] 数据为空，等待服务器推送")
 		return nil
 	}
+	log.Printf("[TCP] 准备解析: 数据源名称=%s, 原始数据=%s, 规则=%s", ds.Name, raw, ds.Rule)
 	val := parseValue(raw, ds.Rule, ds.Name)
 	if math.IsNaN(val) {
 		log.Printf("[TCP] 解析失败，原始数据: %s, 规则: %s", raw, ds.Rule)
 		return nil
 	}
+	log.Printf("[TCP] 返回结果: map[%s:%f]", ds.Name, val)
 	return map[string]float64{ds.Name: val}
 }
 
