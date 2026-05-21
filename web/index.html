@@ -246,6 +246,7 @@ var lb=ch.auto_refresh?'⏸':'▶',cs=ch.auto_refresh?'active-btn':'';
 p.innerHTML='<div class="chart-header"><h3>'+ch.name+' <span style="font-size:10px;color:#64748b">['+ch.interval+'s采集]</span></h3>'+
 '<div class="chart-actions">'+
 '<button class="'+cs+'" onclick="G.toggleAR('+Q(ch.id)+')" id="pause-'+ch.id+'">'+lb+'</button>'+
+'<button onclick="G.exportChart('+Q(ch.id)+')">导出</button>'+
 '<button onclick="G.clearChart('+Q(ch.id)+')" class="danger">清理</button>'+
 '<button onclick="G.openAnn('+Q(ch.id)+')">注释</button>'+
 '</div></div><div class="chart-wrapper"><canvas id="chart-'+ch.id+'"></canvas></div>';
@@ -319,7 +320,22 @@ async function refAC(){if(!C||!C.charts)return;var ps=[];for(var i=0;i<C.charts.
 G.toggleAR=function(cid){var ch=C.charts.find(function(c){return c.id===cid;});if(!ch)return;ch.auto_refresh=!ch.auto_refresh;var b=document.getElementById('pause-'+cid);if(b){b.textContent=ch.auto_refresh?'⏸':'▶';b.className=ch.auto_refresh?'active-btn':'';}};
 G.clearChart=async function(cid){if(!confirm('清理当前图表显示数据？历史保留。'))return;await api('/api/data/clear?chart_id='+cid,{method:'DELETE'});await lCD(cid);};
 G.clearAll=async function(){if(!confirm('清理所有图表当前显示数据？历史保留。'))return;if(C&&C.charts){for(var i=0;i<C.charts.length;i++){if(C.charts[i].enabled)await api('/api/data/clear?chart_id='+C.charts[i].id,{method:'DELETE'});}}lAC();};
-G.exportAll=function(){window.open('/api/export/all','_blank');};
+G.exportAll=function(){
+var url='/api/export/all';
+var params=[];
+if(LXM!=null)params.push('since='+LXM);
+if(LXX!=null)params.push('until='+LXX);
+if(params.length>0)url+='?'+params.join('&');
+window.open(url,'_blank');
+};
+G.exportChart=function(cid){
+var url='/api/export?chart_id='+cid;
+var params=[];
+if(LXM!=null)params.push('since='+LXM);
+if(LXX!=null)params.push('until='+LXX);
+if(params.length>0)url+='&'+params.join('&');
+window.open(url,'_blank');
+};
 G.hideAnn=function(){document.getElementById('annotation-toast').style.display='none';};
 G.submitAnn=async function(){var t=document.getElementById('ann-quick-text').value,p=document.getElementById('ann-quick-pinned').checked;if(!t||!QCID)return;await api('/api/annotations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chart_id:QCID,text:t,timestamp:QTS,pinned:p})});G.hideAnn();lAN(QCID);};
 G.openAnn=function(cid){ACT=cid;document.getElementById('annotation-modal').classList.add('active');rAL();};

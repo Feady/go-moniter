@@ -776,6 +776,14 @@ func (s *Server) handleAnnotations(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	chartID := r.URL.Query().Get("chart_id")
 	chartName := chartID
+	var since, until int64
+	if sv := r.URL.Query().Get("since"); sv != "" {
+		since, _ = strconv.ParseInt(sv, 10, 64)
+	}
+	if uv := r.URL.Query().Get("until"); uv != "" {
+		until, _ = strconv.ParseInt(uv, 10, 64)
+	}
+
 	s.configMu.RLock()
 	for _, c := range s.config.Charts {
 		if c.ID == chartID {
@@ -785,9 +793,9 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 	s.configMu.RUnlock()
 
-	points, err := s.store.GetHistoryPoints(chartID, 0, 0)
+	points, err := s.store.GetHistoryPoints(chartID, since, until)
 	if err != nil || len(points) == 0 {
-		points, _ = s.store.GetDataPoints(chartID, 0, 0)
+		points, _ = s.store.GetDataPoints(chartID, since, until)
 	}
 	anns, _ := s.store.GetAnnotations(chartID)
 
